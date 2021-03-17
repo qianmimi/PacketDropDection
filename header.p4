@@ -46,14 +46,17 @@ struct headers {
 /*===========================================
 =            Metadata            =
 ===========================================*/
-
-struct metadata {
+struct ingress_metadata_t {
     bit<32>  startPId;
     bit<32>  endPId;
     bit<16>  downPortHashVal;///???not sure
     bit<16>  upPortHashVal;///???not sure
     bit<32>  upPortPos;
     bit<1>  dflag;
+}
+
+struct metadata {
+    ingress_metadata_t   ingress_metadata;
 }
 
 
