@@ -46,6 +46,7 @@ struct headers {
 /*===========================================
 =            Metadata            =
 ===========================================*/
+
 struct metadata {
     bit<32>  startPId;
     bit<32>  endPId;
@@ -59,6 +60,7 @@ struct metadata {
 /*===========================================
 =            Notice Headers.            =
 ===========================================*/
+
 header sfNotice_t {
       bit<32>  startPId;
       bit<32>  endPId;
