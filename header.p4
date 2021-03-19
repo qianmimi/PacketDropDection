@@ -48,7 +48,6 @@ header_type l4_ports_t {
 }
 header l4_ports_t l4_ports;
 
-
 header_type sfInfoKey_t {
     fields {
         startPId : 32;
