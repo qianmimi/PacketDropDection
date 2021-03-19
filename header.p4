@@ -7,65 +7,65 @@
 /*===========================================
 =            Forwarding Headers.            =
 ===========================================*/
-header ethernet_t {
-    bit<48>  dstAddr;
-    bit<48>  srcAddr;
-    bit<16>  etherType;
+header_type ethernet_t {
+        fields {
+        dstAddr : 48;
+        srcAddr : 48;
+        etherType : 16;
+    }
 }
+header ethernet_t ethernet;
 
-header ipv4_t {
-        bit<4>  version;
-        bit<4>  ihl;
-        bit<8>  diffserv;
-        bit<16>  totalLen;
-        bit<16>  identification;
-        bit<3>   flags;
-        bit<13>  fragOffset;
-        bit<8>   ttl;
-        bit<8>   protocol;
-        bit<16>  hdrChecksum;
-        bit<32>  srcAddr;
-        bit<32>  dstAddr;
+header_type ipv4_t {
+    fields {
+        version : 4;
+        ihl : 4;
+        diffserv : 8;
+        totalLen : 16;
+        identification : 16;
+        flags : 3;
+        fragOffset : 13;
+        ttl : 8;
+        protocol : 8;
+        hdrChecksum : 16; // here
+        srcAddr : 32;
+        dstAddr: 32;
+    }
 }
+header ipv4_t ipv4;
 
-header ipv4_option_t {
-        bit<16>   packetID;  // a private sequence number
+header_type ipv4_option_t {
+    fields {
+        packetID : 16;   // a private sequence number
+    }
 }
+header ipv4_option_t ipv4_option;
 
-header l4_ports_t {
-        bit<32>  ports;
+header_type l4_ports_t {
+    fields {
+        ports : 32;
+    }
 }
+header l4_ports_t l4_ports;
 
-struct headers {
-    ethernet_t   ethernet;
-    ipv4_t       ipv4;
-    ipv4_option_t   ipv4_option;
-    l4_ports_t   l4_ports;
+
+header_type sfInfoKey_t {
+    fields {
+        startPId : 32;
+        endPId : 32;
+        downPortHashVal: 16;///???not sure
+        upPortHashVal: 16;///???not sure
+        upPortPos : 32;
+        dflag : 1;
+    }
 }
+metadata sfInfoKey_t sfInfoKey;
 
-/*===========================================
-=            Metadata            =
-===========================================*/
-struct ingress_metadata_t {
-    bit<32>  startPId;
-    bit<32>  endPId;
-    bit<16>  downPortHashVal;///???not sure
-    bit<16>  upPortHashVal;///???not sure
-    bit<32>  upPortPos;
-    bit<1>  dflag;
+header_type sfNotice_t {
+    fields {
+        startPId : 32;
+        endPId : 32;
+        realEtherType : 16;
+    }
 }
-
-struct metadata {
-    ingress_metadata_t   ingress_metadata;
-}
-
-
-/*===========================================
-=            Notice Headers.            =
-===========================================*/
-
-header sfNotice_t {
-      bit<32>  startPId;
-      bit<32>  endPId;
-      bit<16>  realEtherType;
-}
+header sfNotice_t sfNotice;
