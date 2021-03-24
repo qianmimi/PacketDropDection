@@ -3,16 +3,16 @@
  * mainDropDetect.p4
  * 
  */
-#include "includes/defines.p4"
-#include "includes/headers.p4"
-#include "includes/parsers.p4"
-#include "includes/checksum.p4"
+#include "headers.p4"
+#include "parsers.p4"
 
-#include "cache.p4"
-#include "heavy_hitter.p4"
-#include "value.p4"
-#include "ipv4.p4"
-#include "ethernet.p4"
+header_type port_pktId_t {
+    fields {
+        index: 16;        
+        packetIds: 32;
+    }
+}
+metadata port_pktId_t port_pktId;
 
 control ingress {
     process_cache();
@@ -28,25 +28,28 @@ control egress {
     apply (ethernet_set_mac);
 }
 
-field_list downPortFields {
+
+field_list inPortFields {	
     ig_intr_md.ingress_port;
 }
-field_list_calculation downPortHashCalc {
-    input { downPortFields; }
+field_list_calculation inPortHashCalc {
+    input { inPortFields; }
     algorithm : crc16;
     output_width : SF_SHORT_BIT_WIDTH;
 }
 
-field_list upPortFields {
+
+field_list outPortFields {
     eg_intr_md.egress_port;
 }
 field_list_calculation upPortHashCalc {
-    input { upPortFields; }
+    input { outPortFields; }
     algorithm : crc16;
     output_width : SF_SHORT_BIT_WIDTH;
 }
-control ingress {
-    apply(tiDectectDrop);//verify whether packet drop,TO DO：need to modify
+control process_1 {
+    apply(tiDectectDrop);
+    if()
     //TO DO
     /*1, forward packet always,
       2, if sfInfoKey.dflag==1 constructs a packet which contains the starting and ending of missing sequence numbers and sends it to upstreamswitch
@@ -110,27 +113,29 @@ action aeRemoveSfHeader() {
 
 @pragma stage 0
 table tiDectectDrop{
-    reads {ethernet.etherType : exact;}//verify normal packet or notice packet
-    actions {aiDownPortPktId; aiNoOp;}
-    default_action : aiNoOp();
+    reads {ethernet.etherType : exact;}        // normal packet or notice packet
+    actions {ainPortPktId; aiRecordDropId;}
+    default_action : ainPortPktId();
     size : 128;
 }
-//if normal packet
-action aiDownPortPktId() {  
-    modify_field(sfInfoKey.endPId, ipv4_option.packetID);
-    modify_field_with_hash_based_offset(sfInfoKey.downPortHashVal, 0, downPortHashCalc, SF_SHORT_BIT_WIDTH);
-    sDownPortPktId.execute_stateful_alu(sfInfoKey.downPortHashVal);
-    if(sfInfoKey.endPId==sfInfoKey.startPId+1){
-    	modify_field(sfInfoKey.dflag,1);
-    }   
+
+action ainPortPktId() {  
+    modify_field(sfInfoKey.endPId, ipv4_option.packetID-1);
+    modify_field_with_hash_based_offset(port_pktId.index, 0, inPortHashCalc, SF_SHORT_BIT_WIDTH);
+    register_read(port_pktId.packetIds, rinPortPktId, port_pktId.index);
+    register_write(rinPortPktId, port_pktId.index, port_pktId.packetIds + 1);   
 }
 
-//if packetId==register+1,no drop
-/* else inconsecutive sequence numbers as a sign of packet drops;*/
-/*dflag==0 no drop ; dflag==1 drop*/
+//a in port Array
+register rinPortPktId {
+    width : 32;
+    instance_count : SF_SHORT_SIZE;
+}
+
+
 blackbox stateful_alu sDownPortPktId{
     reg : rDownPortPktId;
-    condition_lo : ipv4_option.packetID== register_lo+1;
+    condition_lo : ipv4_option.packetID== register_lo;
 
     update_lo_1_predicate : condition_lo;
     update_lo_1_value : register_lo+1;
@@ -139,10 +144,6 @@ blackbox stateful_alu sDownPortPktId{
     output_value : register_lo;
 }
 
-register rDownPortPktId {
-    width : 32;
-    instance_count : SF_SHORT_SIZE;
-}
 
 //ring buffer pos == pkt numbers
 blackbox stateful_alu rPortBuffPosUpdate{
