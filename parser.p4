@@ -102,7 +102,11 @@ parser parse_l4 {
     extract(l4_ports);
     return ingress;
 }
-
+//notification
+parser parse_drop_nf {
+    extract(sfNotice);
+    return ingress;
+}
 
 // looks up its ring buffer for the packets whose sequence
 //numbers fall into the missing interval and reports them as dropped
