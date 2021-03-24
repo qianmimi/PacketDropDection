@@ -49,7 +49,10 @@ field_list_calculation upPortHashCalc {
 }
 control process_1 {
     apply(tiDectectDrop);
-    if()
+    if(sfInfoKey.endPId==port_pktId.packetIds){
+    	
+    
+    }
     //TO DO
     /*1, forward packet always,
       2, if sfInfoKey.dflag==1 constructs a packet which contains the starting and ending of missing sequence numbers and sends it to upstreamswitch
@@ -132,6 +135,9 @@ register rinPortPktId {
     instance_count : SF_SHORT_SIZE;
 }
 
+action aiRecordDropId(){
+	
+}
 
 blackbox stateful_alu sDownPortPktId{
     reg : rDownPortPktId;
