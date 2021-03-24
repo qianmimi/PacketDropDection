@@ -14,6 +14,7 @@
         upPortHashVal: 16;///???not sure
         upPortPos : 32;
         dflag : 1;
+        normal : 1;
     }
 }
 
