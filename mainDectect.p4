@@ -6,13 +6,21 @@
 #include "headers.p4"
 #include "parsers.p4"
 
-header_type port_pktId_t {
+header_type port_pktIds_t {
     fields {
         index: 16;        
-        packetIds: 32;
+        packetId: 32;
     }
 }
-metadata port_pktId_t port_pktId;
+metadata port_pktIds_t port_pktIds;
+
+header_type pointer_t {
+    fields {
+        qfront: 16;        
+        qrear: 16;
+    }
+}
+metadata pointer_t pointer;
 
 control ingress {
     process_cache();
@@ -48,11 +56,17 @@ field_list_calculation upPortHashCalc {
     output_width : SF_SHORT_BIT_WIDTH;
 }
 control process_1 {
-    apply(tiDectectDrop);
-    if(sfInfoKey.endPId==port_pktId.packetIds){
-    	
-    
+    if (valid(sfNotice)){
+    	apply (tiRecord);
+	apply (tiTocpu);
     }
+    else{
+    	apply (tiDetectDrop);
+	if(sfInfoKey.endPId==port_pktIds.packetId){
+	     apply (tiTocpu);
+	}
+    }
+
     //TO DO
     /*1, forward packet always,
       2, if sfInfoKey.dflag==1 constructs a packet which contains the starting and ending of missing sequence numbers and sends it to upstreamswitch
@@ -115,40 +129,59 @@ action aeRemoveSfHeader() {
 }
 
 @pragma stage 0
-table tiDectectDrop{
-    reads {ethernet.etherType : exact;}        // normal packet or notice packet
-    actions {ainPortPktId; aiRecordDropId;}
-    default_action : ainPortPktId();
-    size : 128;
+table tiRecord{
+    actions {aiRecordDropId;}
+    default_action : aiRecordDropId;
 }
-
+table tiDetectDrop{
+    actions {ainPortPktId;}
+    default_action : ainPortPktId;
+}
 action ainPortPktId() {  
     modify_field(sfInfoKey.endPId, ipv4_option.packetID-1);
-    modify_field_with_hash_based_offset(port_pktId.index, 0, inPortHashCalc, SF_SHORT_BIT_WIDTH);
-    register_read(port_pktId.packetIds, rinPortPktId, port_pktId.index);
-    register_write(rinPortPktId, port_pktId.index, port_pktId.packetIds + 1);   
+    modify_field_with_hash_based_offset(port_pktIds.index, 0, inPortHashCalc, SF_SHORT_BIT_WIDTH);
+    register_read(port_pktIds.packetId, rinPortPktId, port_pktIds.index);
+    register_write(rinPortPktId, port_pktIds.index, port_pktIds.packetId + 1);   
 }
-
-//a in port Array
+//a in-port Array
 register rinPortPktId {
     width : 32;
     instance_count : SF_SHORT_SIZE;
 }
-
 action aiRecordDropId(){
-	
+    register_read(pointer.qfront, rfront, 0);
+    register_read(pointer.qrear, rrear, 0);
+    register_write(rstartId, pointer.qrear, sfNotice.startPId);
+    register_write(rendId, pointer.qrear, sfNotice.endPId);
+    register_write(rrear, 0, pointer.qrear+1);
+}
+//a Queue: record start and end drop id
+register rfront{
+    width : 32;
+    instance_count : 1;
+}
+register rrear{
+    width : 32;
+    instance_count : 1;
+}
+register rstartId{
+    width : 32;
+    instance_count : SF_SHORT_SIZE;
+}
+register rendId{
+    width : 32;
+    instance_count : SF_SHORT_SIZE;
+}
+table tiTocpu{
+    actions {aiTocpu;}
+    default_action : aiTocpu;
+}
+action aiTocpu(){
+    
 }
 
-blackbox stateful_alu sDownPortPktId{
-    reg : rDownPortPktId;
-    condition_lo : ipv4_option.packetID== register_lo;
 
-    update_lo_1_predicate : condition_lo;
-    update_lo_1_value : register_lo+1;
 
-    output_dst : sfInfoKey.startPId;
-    output_value : register_lo;
-}
 
 
 //ring buffer pos == pkt numbers
