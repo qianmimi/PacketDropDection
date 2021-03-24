@@ -36,7 +36,6 @@ control egress {
     apply (ethernet_set_mac);
 }
 
-
 field_list inPortFields {	
     ig_intr_md.ingress_port;
 }
@@ -172,12 +171,16 @@ register rendId{
     width : 32;
     instance_count : SF_SHORT_SIZE;
 }
-table tiTocpu{
-    actions {aiTocpu;}
-    default_action : aiTocpu;
+#define CPU_MIRROR_SESSION_ID                  250
+field_list copy_to_cpu_fields {
+    standard_metadata;
 }
-action aiTocpu(){
-    
+action do_copy_to_cpu() {
+    clone_ingress_pkt_to_egress(CPU_MIRROR_SESSION_ID, copy_to_cpu_fields);
+}
+table tiTocpu {
+    actions {do_copy_to_cpu;}
+    default_action : do_copy_to_cpu;
 }
 
 
