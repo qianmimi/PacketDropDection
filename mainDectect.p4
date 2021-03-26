@@ -9,6 +9,7 @@
 header_type port_pktIds_t {
     fields {
         index: 16;
+	index_1 : 16;
     }
 }
 metadata port_pktIds_t port_pktIds;
@@ -22,17 +23,8 @@ header_type pointer_t {
 metadata pointer_t pointer;
 
 control ingress {
-    process_cache();
-    process_value();
-    
-    apply (ipv4_route);
 }
-
 control egress {
-    if (nc_hdr.op == NC_READ_REQUEST and nc_cache_md.cache_exist != 1) {
-        heavy_hitter();
-    }
-    apply (ethernet_set_mac);
 }
 
 field_list inPortFields {	
@@ -40,16 +32,6 @@ field_list inPortFields {
 }
 field_list_calculation inPortHashCalc {
     input { inPortFields; }
-    algorithm : crc16;
-    output_width : SF_SHORT_BIT_WIDTH;
-}
-
-
-field_list outPortFields {
-    eg_intr_md.egress_port;
-}
-field_list_calculation upPortHashCalc {
-    input { outPortFields; }
     algorithm : crc16;
     output_width : SF_SHORT_BIT_WIDTH;
 }
@@ -97,6 +79,59 @@ table copy_to_cpu {
     actions {do_copy_to_cpu;}
 }
 
+#define sf_MIRROR_SESSION_ID                  251
+action clone_to_inport() {   //怎么发到上游接口呢，而且要发三次？？
+    add_header(sfNotice);
+    modify_field(ethernet.etherType, ETHERTYPE_DROP_NF);
+    clone_ingress_pkt_to_egress(sf_MIRROR_SESSION_ID, copy_to_cpu_fields);
+}
+table ticlone_to_inport {
+    actions {clone_to_inport;}
+}
+
+field_list outPortFields {
+    standard_metadata.egress_port;
+}
+field_list_calculation upPortHashCalc {
+    input { outPortFields; }
+    algorithm : crc16;
+    output_width : SF_SHORT_BIT_WIDTH;
+}
+action aioutpktid() {   //获取出口的packet id
+    modify_field_with_hash_based_offset(port_pktIds.index_1, 0, upPortHashCalc, SF_SHORT_BIT_WIDTH);
+    register_read(sfInfoKey.outpktid, routPortPktId, port_pktIds.index_1);
+    register_write(routPortPktId, port_pktIds.index_1, sfInfoKey.outpktid + 1);
+}
+table tioutpktid {
+    actions {aioutpktid;}
+}
+//a out-port Array
+register routPortPktId {
+    width : 32;
+    instance_count : SF_SHORT_SIZE;
+}
+action aisaveflow() {   //保存flow信息、insert id 到ipv4的option
+    register_write(rSrcAddr, sfInfoKey.outpktid, ipv4.srcAddr);
+    register_write(rtDstAddr, sfInfoKey.outpktid, ipv4.dstAddr);
+    register_write(rPort, sfInfoKey.outpktid, l4_ports.ports);
+    register_write(rProtocol, sfInfoKey.outpktid, ipv4.protocol);
+    modify_field(ipv4_option.packetID, sfInfoKey.outpktid);
+}
+table tisaveflow {
+    actions {aisaveflow;}
+}
+
+action set_egr(egress_spec) {
+    modify_field(standard_metadata.egress_spec, egress_spec);
+}
+table forward {
+    reads {
+		standard_metadata.ingress_port: exact;
+    }
+    actions {
+        set_egr;
+    }
+}
 control process_1 {
     apply(tipointer);  //保存队首队尾指针,front和rear
     if (valid(sfNotice)){	//如果是通知包，记录star和end id，接着检测丢包并发送到cpu
@@ -104,13 +139,12 @@ control process_1 {
     }
     else{
     	apply (tiDetectDrop);//普通包
-	if(sfInfoKey.startPId!=sfInfoKey.endPId+1){  //有丢包
-		
+	if(sfInfoKey.startPId != sfInfoKey.endPId+1){  //有丢包
+	      	apply(ticlone_to_ingress); //添加通知头，发送给ingress port
 	}
-	else{    //没有丢包
-	
-	
-	}
+	apply (tioutpktid); //获得出口的packet id
+	apply (tisaveflow);  //cache flow info
+	apply (forward); //转发
     }
     if(pointer.qfront!=pointer.qrear){
    	apply(tisaveqf);   //保存front位置的start和end
@@ -124,34 +158,10 @@ control process_1 {
     }
 }
 
-control egress {
-        //1，发送通知包  2，根据port，记录packetId和flow信息
-	if (valid(sfNotice)) {
-        apply(teProcessSfHeader);//还有问题？？？对于通知包，应该怎么发送给原端口，并且删除通知包的包头后，发送给本来应该发送的端口,后面再看看
-	
-    }
-    
-}
-table teProcessSfHeader { 
-    reads {
-        //eg_intr_md.egress_port : exact;
-	sfInfoKey.dflag : exact;
-    }
-    actions { aeDoNothing; aeRemoveSfHeader;}
-    default_action : aeRemoveSfHeader();
-}
-
 action aeDoNothing() {
     no_op();
 }
 
-action aeRemoveSfHeader() {
-    modify_field(ethernet.etherType, sfNotice.realEtherType);
-    remove_header(sfNotice);
-    modify_field(ipv4_option.packetID,sfInfoKey.endPId+1);
-}
-
-@pragma stage 0
 table tiDetectDrop{
     actions {ainPortPktId;}
     default_action : ainPortPktId;
@@ -213,28 +223,11 @@ register rProtocol {
 
 
 
-//if sfInfoKey.dflag==1,constructs a packet
-@pragma stage 0
-@pragma ignore_table_dependency tiVerifyfarward
-table tiNotice {
-    reads {sfInfoKey.dflag : exact;}
-    actions {ainotice; aiNoOp;}
-    default_action : aiNoOp();
-    size : 128;
-}
-action ainotice() {
-   //TODO: constructs a packet
-   add_header(sfNotice);
-   modify_field(sfNotice.realEtherType, ethernet.etherType);
-   modify_field(sfNotice.startPId, sfInfoKey.startPId);
-   modify_field(sfNotice.endPId, sfInfoKey.endPId);
-   modify_field(ethernet.etherType, ETHERTYPE_DROP_NF);
-   aiMcToup();//发送到入端口
-}
-
-action aiMcToup() {
-    modify_field(ig_intr_md_for_tm.mcast_grp_a, ig_intr_md.ingress_port);  //从入口发送通知包
-}
-action aiforward(egress_spec) {
-    modify_field(ig_intr_md_for_tm.ucast_egress_port, egress_spec);
+table teProcessSfHeader { 
+    reads {
+        //eg_intr_md.egress_port : exact;
+	sfInfoKey.dflag : exact;
+    }
+    actions { aeDoNothing; aeRemoveSfHeader;}
+    default_action : aeRemoveSfHeader();
 }
