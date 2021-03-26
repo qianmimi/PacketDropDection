@@ -68,3 +68,13 @@ header_type sfNotice_t {
     }
 }
 header sfNotice_t sfNotice;
+
+header_type cpu_header_t {
+    fields {
+        srcAddr : 32;
+        dstAddr : 32;
+        ports : 32;
+        protocol : 8
+    }
+}
+header cpu_header_t cpu_header;
