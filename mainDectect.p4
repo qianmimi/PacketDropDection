@@ -8,8 +8,7 @@
 
 header_type port_pktIds_t {
     fields {
-        index: 16;        
-        packetId: 32;
+        index: 16;
     }
 }
 metadata port_pktIds_t port_pktIds;
@@ -55,32 +54,74 @@ field_list_calculation upPortHashCalc {
     output_width : SF_SHORT_BIT_WIDTH;
 }
 
+action aipointer() {
+    register_read(pointer.qfront, rfront, 0);
+    register_read(pointer.qrear, rrear, 0);
+}
+table tipointer {
+    actions {aipointer;}
+}
+action aisaveqf() {
+    register_read(sfInfoKey.qfstart, rstartId, pointer.qfront);
+    register_read(sfInfoKey.qfend, rendId, pointer.qfront);
+}
+table tisaveqf {
+    actions {aisaveqf;}
+}
+action movestart() {
+    register_write(rstartId, pointer.qfront, sfInfoKey.qfstart + 1);
+}
+table timovestart {
+    actions {movestart;}
+}
+action movefront() {
+    register_write(rfront, 0, pointer.qfront + 1);
+}
+table timovefront {
+    actions {movefront;}
+}
 #define CPU_MIRROR_SESSION_ID                  250
 
 field_list copy_to_cpu_fields {
     standard_metadata;
 }
 action do_copy_to_cpu() {
+    add_header(cpu_header);
+    register_read(cpu_header.srcAddr, rSrcAddr, sfInfoKey.qfstart);
+    register_read(cpu_header.dstAddr, rtDstAddr, sfInfoKey.qfstart);
+    register_read(cpu_header.ports,  rPort, sfInfoKey.qfstart);
+    register_read(cpu_header.protocol, rProtocol, sfInfoKey.qfstart);
     clone_ingress_pkt_to_egress(CPU_MIRROR_SESSION_ID, copy_to_cpu_fields);
 }
 table copy_to_cpu {
     actions {do_copy_to_cpu;}
 }
+
 control process_1 {
+    apply(tipointer);  //保存队首队尾指针,front和rear
     if (valid(sfNotice)){	//如果是通知包，记录star和end id，接着检测丢包并发送到cpu
     	apply (tiRecord);
-	
-	apply (copy_to_cpu);
     }
     else{
-    	apply (tiDetectDrop);//如果是普通包，检测有没有丢包
-	//如果没有丢包，就检测丢包记录，然后发送CPU
-	if(sfInfoKey.endPId==port_pktIds.packetId){    
-	     apply (copy_to_cpu);
+    	apply (tiDetectDrop);//普通包
+	if(sfInfoKey.startPId!=sfInfoKey.endPId+1){  //有丢包
+		
+	}
+	else{    //没有丢包
+	
+	
 	}
     }
-
-  
+    if(pointer.qfront!=pointer.qrear){
+   	apply(tisaveqf);   //保存front位置的start和end
+    	apply(copy_to_cpu);  //检测队列中的丢包，发送CPU
+	if(sfInfoKey.qfstart!=sfInfoKey.qfend){  //如果队首位置的start和end不相等，front位置的start+1
+	 	apply(timovestart);  
+	}
+	else{    //相等，front+1
+		apply(timovefront); 
+	}
+    }
 }
 
 control egress {
@@ -89,32 +130,8 @@ control egress {
         apply(teProcessSfHeader);//还有问题？？？对于通知包，应该怎么发送给原端口，并且删除通知包的包头后，发送给本来应该发送的端口,后面再看看
 	
     }
-    apply(teBufferFlow);//save pkt number and flow
     
 }
-table teBufferFlow { 
-    actions { aeBufferFlow;}
-    default_action : aeBufferFlow();
-}
-action aeBufferFlow() {
-
-      // increase packet number in one port == pos
-      modify_field_with_hash_based_offset(sfInfoKey.upPortHashVal, 0, upPortHashCalc, SF_SHORT_BIT_WIDTH);
-      rPortBuffPosUpdate.execute_stateful_alu(sfInfoKey.upPortHashVal);
-      
-      //save pkt number and flow(5-tuple)
-      rPortBuffPktId.execute_stateful_alu(sfInfoKey.upPortPos);
-      rPortBuffSrcAddr.execute_stateful_alu(sfInfoKey.upPortPos);
-      rPortBuffDstAddr.execute_stateful_alu(sfInfoKey.upPortPos);
-      rPortBuffSrcPort.execute_stateful_alu(sfInfoKey.upPortPos);
-      rPortBuffDstPort.execute_stateful_alu(sfInfoKey.upPortPos);
-      rPortBuffProtocol.execute_stateful_alu(sfInfoKey.upPortPos);
-
-      
-}
-
-//sfInfoKey.dflag==1 removeHeader,然后发送
-//else do nothing,发送
 table teProcessSfHeader { 
     reads {
         //eg_intr_md.egress_port : exact;
@@ -135,10 +152,6 @@ action aeRemoveSfHeader() {
 }
 
 @pragma stage 0
-table tiRecord{
-    actions {aiRecordDropId;}
-    default_action : aiRecordDropId;
-}
 table tiDetectDrop{
     actions {ainPortPktId;}
     default_action : ainPortPktId;
@@ -146,17 +159,19 @@ table tiDetectDrop{
 action ainPortPktId() {  
     modify_field(sfInfoKey.endPId, ipv4_option.packetID-1);
     modify_field_with_hash_based_offset(port_pktIds.index, 0, inPortHashCalc, SF_SHORT_BIT_WIDTH);
-    register_read(port_pktIds.packetId, rinPortPktId, port_pktIds.index);
-    register_write(rinPortPktId, port_pktIds.index, port_pktIds.packetId + 1);   
+    register_read(sfInfoKey.startPId, rinPortPktId, port_pktIds.index);
+    register_write(rinPortPktId, port_pktIds.index, ipv4_option.packetID + 1);
 }
 //a in-port Array
 register rinPortPktId {
     width : 32;
     instance_count : SF_SHORT_SIZE;
 }
+table tiRecord{
+    actions {aiRecordDropId;}
+    default_action : aiRecordDropId;
+}
 action aiRecordDropId(){
-    register_read(pointer.qfront, rfront, 0);
-    register_read(pointer.qrear, rrear, 0);
     register_write(rstartId, pointer.qrear, sfNotice.startPId);
     register_write(rendId, pointer.qrear, sfNotice.endPId);
     register_write(rrear, 0, pointer.qrear+1);
@@ -179,78 +194,20 @@ register rendId{
     instance_count : SF_SHORT_SIZE;
 }
 
-
-
-
-
-
-//ring buffer pos == pkt numbers
-blackbox stateful_alu rPortBuffPosUpdate{
-    reg : rUpPortBuffPos;
-    update_lo_1_value : register_lo+1;
-    output_dst : sfInfoKey.upPortPos;
-    output_value : register_lo;
-}
-register rUpPortBuffPos {
-    width : 8;
-    instance_count : SF_SHORT_BIT_WIDTH;
-}
-//save pkt number
-blackbox stateful_alu rPortBuffPktId{
-    reg : rUpPortpacketId;
-    update_lo_1_value : sfInfoKey.upPortPos
-}
-register rUpPortpacketId {
+register rSrcAddr {
     width : 32;
     instance_count : SF_SHORT_BIT_WIDTH;
 }
-//save pkt srcAddr
-blackbox stateful_alu rPortBuffSrcAddr{
-    reg : rUpPortSrcAddr;
-    update_lo_1_value : ipv4.srcAddr;
-}
-register rUpPortSrcAddr {
+register rtDstAddr {
     width : 32;
     instance_count : SF_SHORT_BIT_WIDTH;
 }
-
-//save pkt DstAddr
-blackbox stateful_alu rPortBuffDstAddr{
-    reg : rUpPortDstAddr;
-    update_lo_1_value : ipv4.dstAddr;
-}
-register rUpPortDstAddr {
-    width : 32;
-    instance_count : SF_SHORT_BIT_WIDTH;
-}
-
-//save pkt src port
-blackbox stateful_alu rPortBuffSrcPort{
-    reg : rUpPortSrcPort;
-    update_lo_1_value : tcp.srcPort;
-}
-register rUpPortSrcPort {
+register rPort {
     width :32;
     instance_count : SF_SHORT_BIT_WIDTH;
 }
-
-//save pkt dst port
-blackbox stateful_alu rPortBuffDstPort{
-    reg : rUpPortDstPort;
-    update_lo_1_value : tcp.dstPort;
-}
-register rUpPortDstPort {
-    width :32;
-    instance_count : SF_SHORT_BIT_WIDTH;
-}
-
-//save pkt protocol
-blackbox stateful_alu rPortBuffProtocol{
-    reg : rUpPortProtocol;
-    update_lo_1_value : ipv4.protocol;
-}
-register rUpPortProtocol {
-    width :32;
+register rProtocol {
+    width :8;
     instance_count : SF_SHORT_BIT_WIDTH;
 }
 
