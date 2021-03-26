@@ -54,6 +54,7 @@ field_list_calculation upPortHashCalc {
     algorithm : crc16;
     output_width : SF_SHORT_BIT_WIDTH;
 }
+
 #define CPU_MIRROR_SESSION_ID                  250
 
 field_list copy_to_cpu_fields {
@@ -68,6 +69,7 @@ table copy_to_cpu {
 control process_1 {
     if (valid(sfNotice)){	//如果是通知包，记录star和end id，接着检测丢包并发送到cpu
     	apply (tiRecord);
+	
 	apply (copy_to_cpu);
     }
     else{
@@ -78,14 +80,7 @@ control process_1 {
 	}
     }
 
-    //TO DO
-    /*1, forward packet always,
-      2, if sfInfoKey.dflag==1 constructs a packet which contains the starting and ending of missing sequence numbers and sends it to upstreamswitch
-    produce three copies of it in order to avoid drop again */
-    if(sfInfoKey.dflag==1){
-        apply(tiNotice);//
-    }
-
+  
 }
 
 control egress {
