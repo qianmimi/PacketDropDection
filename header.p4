@@ -56,6 +56,8 @@ header_type sfInfoKey_t {
         upPortHashVal: 16;///???not sure
         upPortPos : 32;
         dflag : 1;
+        qfstart : 32;
+        qfend : 32;
     }
 }
 metadata sfInfoKey_t sfInfoKey;
