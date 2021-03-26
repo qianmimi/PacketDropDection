@@ -54,7 +54,7 @@ header_type sfInfoKey_t {
         endPId : 32;
         downPortHashVal: 16;///???not sure
         upPortHashVal: 16;///???not sure
-        upPortPos : 32;
+        outpktid : 32;
         dflag : 1;
         qfstart : 32;
         qfend : 32;
@@ -66,7 +66,6 @@ header_type sfNotice_t {
     fields {
         startPId : 32;
         endPId : 32;
-        realEtherType : 16;
     }
 }
 header sfNotice_t sfNotice;
