@@ -54,15 +54,27 @@ field_list_calculation upPortHashCalc {
     algorithm : crc16;
     output_width : SF_SHORT_BIT_WIDTH;
 }
+#define CPU_MIRROR_SESSION_ID                  250
+
+field_list copy_to_cpu_fields {
+    standard_metadata;
+}
+action do_copy_to_cpu() {
+    clone_ingress_pkt_to_egress(CPU_MIRROR_SESSION_ID, copy_to_cpu_fields);
+}
+table copy_to_cpu {
+    actions {do_copy_to_cpu;}
+}
 control process_1 {
-    if (valid(sfNotice)){
+    if (valid(sfNotice)){	//如果是通知包，记录star和end id，接着检测丢包并发送到cpu
     	apply (tiRecord);
-	apply (tiTocpu);
+	apply (copy_to_cpu);
     }
     else{
-    	apply (tiDetectDrop);
-	if(sfInfoKey.endPId==port_pktIds.packetId){
-	     apply (tiTocpu);
+    	apply (tiDetectDrop);//如果是普通包，检测有没有丢包
+	//如果没有丢包，就检测丢包记录，然后发送CPU
+	if(sfInfoKey.endPId==port_pktIds.packetId){    
+	     apply (copy_to_cpu);
 	}
     }
 
@@ -171,17 +183,7 @@ register rendId{
     width : 32;
     instance_count : SF_SHORT_SIZE;
 }
-#define CPU_MIRROR_SESSION_ID                  250
-field_list copy_to_cpu_fields {
-    standard_metadata;
-}
-action do_copy_to_cpu() {
-    clone_ingress_pkt_to_egress(CPU_MIRROR_SESSION_ID, copy_to_cpu_fields);
-}
-table tiTocpu {
-    actions {do_copy_to_cpu;}
-    default_action : do_copy_to_cpu;
-}
+
 
 
 
