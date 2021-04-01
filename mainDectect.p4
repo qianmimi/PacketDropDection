@@ -3,13 +3,16 @@
  * mainDropDetect.p4
  * 
  */
-#include "headers.p4"
-#include "parsers.p4"
+#include "includes/headers.p4"
+#include "includes/parser.p4"
+
+#define SF_SHORT_BIT_WIDTH 12
+#define SF_SHORT_SIZE 5
 
 header_type port_pktIds_t {
     fields {
-        index: 16;
-	index_1 : 16;
+        index: 12;
+	index_1 : 12;
     }
 }
 metadata port_pktIds_t port_pktIds;
@@ -22,18 +25,42 @@ header_type pointer_t {
 }
 metadata pointer_t pointer;
 
-control ingress {
+header_type sfInfoKey_t {
+    fields {
+        startPId : 12;
+        endPId : 12;
+        downPortHashVal: 12;///???not sure
+        upPortHashVal: 12;///???not sure
+        outpktid : 12;
+        dflag : 1;
+        qfstart : 12;
+        qfend : 12;
+    }
 }
-control egress {
-}
+metadata sfInfoKey_t sfInfoKey;
 
 field_list inPortFields {	
-    ig_intr_md.ingress_port;
+    standard_metadata.ingress_port;
 }
 field_list_calculation inPortHashCalc {
     input { inPortFields; }
     algorithm : crc16;
     output_width : SF_SHORT_BIT_WIDTH;
+}
+field_list outPortFields {
+    standard_metadata.egress_port;
+}
+field_list_calculation upPortHashCalc {
+    input { outPortFields; }
+    algorithm : crc16;
+    output_width : SF_SHORT_BIT_WIDTH;
+}
+
+control ingress {
+	process_1();
+}
+control egress {
+	process_2();
 }
 
 action aipointer() {
@@ -62,41 +89,6 @@ action movefront() {
 table timovefront {
     actions {movefront;}
 }
-#define CPU_MIRROR_SESSION_ID                  250
-
-field_list copy_to_cpu_fields {
-    standard_metadata;
-}
-action do_copy_to_cpu() {
-    add_header(cpu_header);
-    register_read(cpu_header.srcAddr, rSrcAddr, sfInfoKey.qfstart);
-    register_read(cpu_header.dstAddr, rtDstAddr, sfInfoKey.qfstart);
-    register_read(cpu_header.ports,  rPort, sfInfoKey.qfstart);
-    register_read(cpu_header.protocol, rProtocol, sfInfoKey.qfstart);
-    clone_ingress_pkt_to_egress(CPU_MIRROR_SESSION_ID, copy_to_cpu_fields);
-}
-table copy_to_cpu {
-    actions {do_copy_to_cpu;}
-}
-
-#define sf_MIRROR_SESSION_ID                  251
-action clone_to_inport() {   //怎么发到上游接口呢，而且要发三次？？
-    add_header(sfNotice);
-    modify_field(ethernet.etherType, ETHERTYPE_DROP_NF);
-    clone_ingress_pkt_to_egress(sf_MIRROR_SESSION_ID, copy_to_cpu_fields);
-}
-table ticlone_to_inport {
-    actions {clone_to_inport;}
-}
-
-field_list outPortFields {
-    standard_metadata.egress_port;
-}
-field_list_calculation upPortHashCalc {
-    input { outPortFields; }
-    algorithm : crc16;
-    output_width : SF_SHORT_BIT_WIDTH;
-}
 action aioutpktid() {   //获取出口的packet id
     modify_field_with_hash_based_offset(port_pktIds.index_1, 0, upPortHashCalc, SF_SHORT_BIT_WIDTH);
     register_read(sfInfoKey.outpktid, routPortPktId, port_pktIds.index_1);
@@ -107,7 +99,7 @@ table tioutpktid {
 }
 //a out-port Array
 register routPortPktId {
-    width : 32;
+    width : 12;
     instance_count : SF_SHORT_SIZE;
 }
 action aisaveflow() {   //保存flow信息、insert id 到ipv4的option
@@ -115,12 +107,31 @@ action aisaveflow() {   //保存flow信息、insert id 到ipv4的option
     register_write(rtDstAddr, sfInfoKey.outpktid, ipv4.dstAddr);
     register_write(rPort, sfInfoKey.outpktid, l4_ports.ports);
     register_write(rProtocol, sfInfoKey.outpktid, ipv4.protocol);
+    add_header(ipv4_option);
     modify_field(ipv4_option.packetID, sfInfoKey.outpktid);
 }
 table tisaveflow {
     actions {aisaveflow;}
 }
 
+#define INPORT_MIRROR_SESSION_ID                  3
+
+field_list clone_fields {
+    standard_metadata;
+}
+action aiclone_to_e2e() {
+    clone_egress_pkt_to_egress(INPORT_MIRROR_SESSION_ID, clone_fields);
+}
+table ticlone_to_e2e {
+    actions {aiclone_to_e2e;}
+}
+#define CPU_MIRROR_SESSION_ID                  250
+action do_copy_to_cpu() {
+    clone_ingress_pkt_to_egress(CPU_MIRROR_SESSION_ID, clone_fields);
+}
+table copy_to_cpu {
+    actions {do_copy_to_cpu;}
+}
 action set_egr(egress_spec) {
     modify_field(standard_metadata.egress_spec, egress_spec);
 }
@@ -138,28 +149,56 @@ control process_1 {
     	apply (tiRecord);
     }
     else{
+        apply (forward); //转发
     	apply (tiDetectDrop);//普通包
-	if(sfInfoKey.startPId != sfInfoKey.endPId+1){  //有丢包
-	      	apply(ticlone_to_ingress); //添加通知头，发送给ingress port
-	}
-	apply (tioutpktid); //获得出口的packet id
-	apply (tisaveflow);  //cache flow info
-	apply (forward); //转发
     }
     if(pointer.qfront!=pointer.qrear){
-   	apply(tisaveqf);   //保存front位置的start和end
-    	apply(copy_to_cpu);  //检测队列中的丢包，发送CPU
-	if(sfInfoKey.qfstart!=sfInfoKey.qfend){  //如果队首位置的start和end不相等，front位置的start+1
+   	  apply(tisaveqf);   //保存front位置的start和end
+    	  apply(copy_to_cpu);  //检测队列中的丢包，发送CPU
+	  if(sfInfoKey.qfstart!=sfInfoKey.qfend){  //如果队首位置的start和end不相等，front位置的start+1
 	 	apply(timovestart);  
-	}
-	else{    //相等，front+1
-		apply(timovefront); 
-	}
+	   }
+	  else{    //相等，front+1
+	        apply(timovefront); 
+	   }
     }
 }
 
-action aeDoNothing() {
-    no_op();
+action do_cpu_encap() {
+    remove_header(sfNotice);
+    add_header(cpu_header);
+    register_read(cpu_header.srcAddr, rSrcAddr, sfInfoKey.qfstart);
+    register_read(cpu_header.dstAddr, rtDstAddr, sfInfoKey.qfstart);
+    register_read(cpu_header.ports,  rPort, sfInfoKey.qfstart);
+    register_read(cpu_header.protocol, rProtocol, sfInfoKey.qfstart);
+}
+
+table redirect_1 {
+    reads { standard_metadata.instance_type : exact; }
+    actions {do_cpu_encap;}
+}
+
+action do_inport_encap() {
+    remove_header(cpu_header);
+    add_header(sfNotice);
+    modify_field(sfNotice.startPId, sfInfoKey.endPId);
+    modify_field(sfNotice.endPId, sfInfoKey.startPId);
+}
+
+table redirect_2 {
+    reads { standard_metadata.instance_type : exact; }
+    actions {do_inport_encap;}
+}
+control process_2 {
+     if(standard_metadata.instance_type == 0){
+     	  if(sfInfoKey.startPId != sfInfoKey.endPId+1){  //有丢包
+	      	apply(ticlone_to_e2e); //添加通知头，发送给ingress port
+	  }
+          apply (tioutpktid); //获得出口的packet id
+	  apply (tisaveflow);  //cache flow info
+      }
+     apply(redirect_1);
+     apply(redirect_2);
 }
 
 table tiDetectDrop{
@@ -174,7 +213,7 @@ action ainPortPktId() {
 }
 //a in-port Array
 register rinPortPktId {
-    width : 32;
+    width : 12;
     instance_count : SF_SHORT_SIZE;
 }
 table tiRecord{
@@ -188,20 +227,20 @@ action aiRecordDropId(){
 }
 //a Queue: record start and end drop id
 register rfront{
-    width : 32;
+    width : 16;
     instance_count : 1;
 }
 register rrear{
-    width : 32;
+    width : 16;
     instance_count : 1;
 }
 register rstartId{
-    width : 32;
-    instance_count : SF_SHORT_SIZE;
+    width : 12;
+    instance_count : SF_SHORT_BIT_WIDTH;
 }
 register rendId{
-    width : 32;
-    instance_count : SF_SHORT_SIZE;
+    width : 12;
+    instance_count : SF_SHORT_BIT_WIDTH;
 }
 
 register rSrcAddr {
@@ -219,15 +258,4 @@ register rPort {
 register rProtocol {
     width :8;
     instance_count : SF_SHORT_BIT_WIDTH;
-}
-
-
-
-table teProcessSfHeader { 
-    reads {
-        //eg_intr_md.egress_port : exact;
-	sfInfoKey.dflag : exact;
-    }
-    actions { aeDoNothing; aeRemoveSfHeader;}
-    default_action : aeRemoveSfHeader();
 }
